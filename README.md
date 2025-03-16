@@ -26,4 +26,4 @@ research and reporting purposes.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/romania-statistics-dashboard.git
+   git clone https://github.com/predalau/rostats_aggregator.git
