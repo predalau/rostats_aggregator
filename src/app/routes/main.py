@@ -1,4 +1,6 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, render_template
+import pandas as pd
+import plotly.express as px
 
 main = Blueprint("main", __name__)
 
@@ -11,7 +13,7 @@ statistics_data = {
 
 @main.route("/")
 def home():
-    return "Welcome to the Romania Public Statistics Dashboard!"
+    return render_template("index.html")
 
 
 @main.route("/about")
@@ -38,3 +40,21 @@ def get_metric_year(metric, year):
         return jsonify({year: statistics_data[metric][year]})
     else:
         return jsonify({"error": "Metric or year not found"}), 404
+
+
+# ------------------------------------------------
+# Plotly routes
+@main.route("/plot")
+def plot():
+    # Sample data
+    df = pd.DataFrame(
+        {"Year": [2020, 2021, 2022], "Population": [19237691, 19119880, 19000000]}
+    )
+
+    # Create a Plotly chart
+    fig = px.bar(df, x="Year", y="Population", title="Population Over Time")
+
+    # Convert the chart to HTML
+    chart_html = fig.to_html(full_html=False)
+
+    return render_template("plot.html", chart_html=chart_html)
