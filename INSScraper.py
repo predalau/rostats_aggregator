@@ -1,7 +1,7 @@
 import time
 import random
 import os
-import pyautogui
+
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -43,7 +43,12 @@ class INSSEScraper:
 
     def _setup_driver(self):
         """Set up and return a Chrome WebDriver with configured options."""
+        
+        chromium_path = "/usr/bin/chromium"
+        chromedriver_path = "/usr/bin/chromedriver"
+
         chrome_options = Options()
+        chrome_options.binary_location = chromium_path
         chrome_options.add_argument(
             f"user-agent={self.user_agents[self.current_agent_index]}"
         )
@@ -62,7 +67,7 @@ class INSSEScraper:
         }
         chrome_options.add_experimental_option("prefs", prefs)
 
-        service = Service(ChromeDriverManager().install())
+        service = Service(chromedriver_path)
         return webdriver.Chrome(service=service, options=chrome_options)
 
     def _random_delay(self):
