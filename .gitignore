@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 .idea/
+insse_downloads/
 *.pyc
 *.pyo
 *.pyd
