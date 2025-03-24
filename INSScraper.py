@@ -1,7 +1,7 @@
 import time
 import random
 import os
-
+import platform
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -43,12 +43,12 @@ class INSSEScraper:
 
     def _setup_driver(self):
         """Set up and return a Chrome WebDriver with configured options."""
-        
+
         chromium_path = "/usr/bin/chromium"
         chromedriver_path = "/usr/bin/chromedriver"
 
         chrome_options = Options()
-        chrome_options.binary_location = chromium_path
+
         chrome_options.add_argument(
             f"user-agent={self.user_agents[self.current_agent_index]}"
         )
@@ -67,8 +67,15 @@ class INSSEScraper:
         }
         chrome_options.add_experimental_option("prefs", prefs)
 
-        service = Service(chromedriver_path)
-        return webdriver.Chrome(service=service, options=chrome_options)
+        if platform.system() == "Linux":
+            chrome_options.binary_location = chromium_path
+            service = Service(chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        else:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        return driver
 
     def _random_delay(self):
         """Wait for a random time between 0.1 and 0.5 seconds."""
