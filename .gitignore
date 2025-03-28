@@ -2,6 +2,7 @@
 __pycache__/
 .idea/
 insse_downloads/
+rostats_vault/
 *.pyc
 *.pyo
 *.pyd

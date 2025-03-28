@@ -2,6 +2,7 @@ import time
 import random
 import os
 import platform
+import glob
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -11,6 +12,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.action_chains import ActionChains
 from webdriver_manager.chrome import ChromeDriverManager
+from datetime import datetime
 
 
 class INSSEScraper:
@@ -25,7 +27,7 @@ class INSSEScraper:
         ]
         self.current_agent_index = 0
         self.agent_rotation_count = 0
-        self.agent_rotation_threshold = 5  # Change user agent every 5 actions
+        self.agent_rotation_threshold = 5
 
         # Setup download directory
         if download_dir is None:
@@ -43,22 +45,14 @@ class INSSEScraper:
 
     def _setup_driver(self):
         """Set up and return a Chrome WebDriver with configured options."""
-
-        chromium_path = "/usr/bin/chromium"
-        chromedriver_path = "/usr/bin/chromedriver"
-
         chrome_options = Options()
-
         chrome_options.add_argument(
             f"user-agent={self.user_agents[self.current_agent_index]}"
         )
         chrome_options.add_argument("--disable-notifications")
         chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument(
-            "--start-maximized"
-        )  # Important for pixel-based interactions
+        chrome_options.add_argument("--start-maximized")
 
-        # Set download directory
         prefs = {
             "download.default_directory": self.download_dir,
             "download.prompt_for_download": False,
@@ -68,14 +62,12 @@ class INSSEScraper:
         chrome_options.add_experimental_option("prefs", prefs)
 
         if platform.system() == "Linux":
-            chrome_options.binary_location = chromium_path
-            service = Service(chromedriver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
+            chrome_options.binary_location = "/usr/bin/chromium"
+            service = Service("/usr/bin/chromedriver")
         else:
             service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
 
-        return driver
+        return webdriver.Chrome(service=service, options=chrome_options)
 
     def _random_delay(self):
         """Wait for a random time between 0.1 and 0.5 seconds."""
@@ -90,8 +82,6 @@ class INSSEScraper:
             self.current_agent_index = (self.current_agent_index + 1) % len(
                 self.user_agents
             )
-
-            # Update user agent
             self.driver.execute_cdp_cmd(
                 "Network.setUserAgentOverride",
                 {"userAgent": self.user_agents[self.current_agent_index]},
@@ -100,333 +90,372 @@ class INSSEScraper:
                 f"Rotated to user agent: {self.user_agents[self.current_agent_index][:30]}..."
             )
 
+    def _generate_filename(self, table_code, selected_columns):
+        """Generate filename emphasizing the feature over time."""
+        # Filter out PERIOADE for the feature name part
+        features = [col for col in selected_columns if col != "PERIOADE"]
+        feature_str = "_".join([col[:4] for col in features])[:25]
+        timestamp = datetime.now().strftime("%Y%m%d")
+        return f"{table_code}_{feature_str}_OVER_TIME_{timestamp}.csv"
+
+    def _click_table_button(self, table_code):
+        """Clicks the table button reliably even if obscured"""
+        try:
+            # 1. Find the button using precise XPath
+            button_xpath = f"//div[@class='historyBarButton']/button[./span[contains(text(), '{table_code}')]]"
+            btn = self.wait.until(
+                EC.presence_of_element_located((By.XPATH, button_xpath))
+            )
+
+            # 2. Scroll the button into center view (not just into view)
+            self.driver.execute_script(
+                """
+                arguments[0].scrollIntoView({
+                    behavior: 'auto',
+                    block: 'center',
+                    inline: 'center'
+                });
+            """,
+                btn,
+            )
+
+            # 3. Wait until clickable with explicit timeout
+            self.wait.until(EC.element_to_be_clickable((By.XPATH, button_xpath)))
+
+            # 4. Use JavaScript click to bypass overlay interception
+            self.driver.execute_script("arguments[0].click();", btn)
+
+            # 5. Add small delay to ensure action completes
+            self._random_delay()
+
+            print(f"✓ Successfully clicked {table_code} button (JS click)")
+            return True
+
+        except Exception as e:
+            print(f"✗ Critical error clicking {table_code}: {str(e)}")
+            return False
+
+    def _click_home_button(self):
+        """Clicks the home button reliably even if obscured"""
+        try:
+            # 1. Find the button using precise XPath
+            button_xpath = f"//div[@class='historyBarButton']/button[./span[contains(text(), 'home')]]"
+            btn = self.wait.until(
+                EC.presence_of_element_located((By.XPATH, button_xpath))
+            )
+
+            # 2. Scroll the button into center view (not just into view)
+            self.driver.execute_script(
+                """
+                    arguments[0].scrollIntoView({
+                        behavior: 'auto',
+                        block: 'center',
+                        inline: 'center'
+                    });
+                """,
+                btn,
+            )
+
+            # 3. Wait until clickable with explicit timeout
+            self.wait.until(EC.element_to_be_clickable((By.XPATH, button_xpath)))
+
+            # 4. Use JavaScript click to bypass overlay interception
+            self.driver.execute_script("arguments[0].click();", btn)
+
+            # 5. Add small delay to ensure action completes
+            self._random_delay()
+
+            print(f"✓ Successfully clicked Home button (JS click)")
+            return True
+
+        except Exception as e:
+            print(f"✗ Critical error clicking Home: {str(e)}")
+            return False
+
+    def _rename_downloaded_file(self, expected_filename):
+        """Renames the most recently downloaded file to our naming convention"""
+        # Wait for download to complete (adjust timing as needed)
+        time.sleep(3)
+
+        try:
+            # Get list of files in download directory sorted by modification time
+            files = glob.glob(os.path.join(self.download_dir, "*"))
+            files.sort(key=os.path.getmtime, reverse=True)
+
+            if not files:
+                print("✗ No files found in download directory")
+                return False
+
+            # Get the most recent file (should be our download)
+            newest_file = files[0]
+
+            # Generate new filename with full path
+            new_path = os.path.join(self.download_dir, expected_filename)
+
+            # Rename the file
+            os.rename(newest_file, new_path)
+            print(f"✓ Renamed file to: {expected_filename}")
+            return True
+
+        except Exception as e:
+            print(f"✗ Error renaming file: {str(e)}")
+            return False
+
     def navigate_to_website(self):
         """Navigate to the INSSE website."""
+        print("\n=== Initializing scraping session ===")
         print("Navigating to INSSE website...")
         self.driver.get(
             "http://statistici.insse.ro:8077/tempo-online/#/pages/tables/insse-table"
         )
-        time.sleep(3)  # Allow page to fully load
-        print("Successfully loaded INSSE homepage")
+        time.sleep(3)
+        print("✓ Successfully loaded INSSE homepage")
 
     def navigate_to_table_by_path(self, path_elements):
-        """
-        Navigate through the categories to a specific table based on the elements in the path.
-
-        Args:
-            path_elements: List of strings representing the menu items to click
-        """
-        try:
-            print(f"Navigating through path: {path_elements}")
-
-            for element in path_elements:
-                self._random_delay()
-
-                # Try to find the element by text
-                try:
-                    xpath = f"//*[contains(text(), '{element}')]"
-                    menu_item = self.wait.until(
-                        EC.element_to_be_clickable((By.XPATH, xpath))
-                    )
-                    menu_item.click()
-                    print(f"Clicked on '{element}'")
-                except (TimeoutException, NoSuchElementException):
-                    print(
-                        f"Could not find element '{element}' by text, trying alternative approach"
-                    )
-
-                    # If we couldn't find the element by text, use JavaScript to find elements
-                    # that might contain the text in any attribute or content
-                    script = """
+        """Navigate through the categories to a specific table."""
+        print(f"\nNavigating through path: {' > '.join(path_elements)}")
+        for element in path_elements:
+            self._random_delay()
+            try:
+                xpath = f"//*[contains(text(), '{element}')]"
+                menu_item = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH, xpath))
+                )
+                menu_item.click()
+                print(f"✓ Clicked on '{element}'")
+            except Exception:
+                print(
+                    f"⚠ Could not find element '{element}', attempting JavaScript fallback"
+                )
+                element_found = self.driver.execute_script(
+                    """
                     var allElements = document.querySelectorAll('*');
                     for (var i = 0; i < allElements.length; i++) {
-                      var element = allElements[i];
-                      if (element.textContent.includes(arguments[0])) {
-                        element.scrollIntoView();
-                        return element;
-                      }
+                        if (allElements[i].textContent.includes(arguments[0])) {
+                            allElements[i].scrollIntoView();
+                            return allElements[i];
+                        }
                     }
                     return null;
-                    """
-                    element_found = self.driver.execute_script(script, element)
-
-                    if element_found:
-                        self.driver.execute_script(
-                            "arguments[0].click();", element_found
-                        )
-                        print(f"Found and clicked '{element}' using JavaScript")
-                    else:
-                        print(
-                            f"Failed to find element '{element}' even with JavaScript"
-                        )
-
-                self._maybe_rotate_user_agent()
-                time.sleep(2)  # Wait for page transition
-
-            print("Navigation completed successfully")
-            return True
-        except Exception as e:
-            print(f"Error during navigation: {e}")
-            return False
-
-    def navigate_to_table_by_search(self, table_code):
-        """
-        Search for a specific table by its code.
-
-        Args:
-            table_code: String representing the table code (e.g., "POP105A")
-        """
-        try:
-            print(f"Searching for table: {table_code}")
-
-            # Wait for the page to be fully loaded
-            time.sleep(3)
-
-            # Try to find the search field
-            search_fields = self.driver.find_elements(By.XPATH, "//input[@type='text']")
-            search_field = None
-
-            # Find the search field that's visible
-            for field in search_fields:
-                if field.is_displayed():
-                    search_field = field
-                    break
-
-            if search_field:
-                search_field.clear()
-                search_field.send_keys(table_code)
-                print(f"Entered search term: {table_code}")
-                self._random_delay()
-
-                # Try to find and click a button or element that might be the search button
-                search_buttons = self.driver.find_elements(By.XPATH, "//button")
-                for button in search_buttons:
-                    if button.is_displayed() and (
-                        "search" in button.get_attribute("class").lower()
-                        or "cauta" in button.get_attribute("class").lower()
-                    ):
-                        button.click()
-                        print("Clicked search button")
-                        time.sleep(2)
-                        break
-
-                # Now try to find the table in the results
-                table_elements = self.driver.find_elements(
-                    By.XPATH, f"//*[contains(text(), '{table_code}')]"
+                """,
+                    element,
                 )
-                for element in table_elements:
-                    if element.is_displayed():
-                        element.click()
-                        print(f"Found and clicked on table: {table_code}")
-                        time.sleep(3)  # Wait for table to load
-                        return True
+                if element_found:
+                    self.driver.execute_script("arguments[0].click();", element_found)
+                    print(f"✓ Found and clicked '{element}' using JavaScript")
+                else:
+                    print(f"✗ Failed to find element '{element}'")
+                    return False
+            self._maybe_rotate_user_agent()
+            time.sleep(2)
+        return True
 
-                print(f"Could not find table {table_code} in search results")
-            else:
-                print("Could not find search field")
-
-            return False
-        except Exception as e:
-            print(f"Error during table search: {e}")
-            return False
-
-    def select_parameter(self, checkbox):
-        """Select all parameters for a table."""
+    def get_column_names(self):
+        """Get names of all available columns."""
         try:
-            print("Selecting parameter")
-
-            # Wait for the checkboxes to be present
-            checkboxes = self.wait.until(
-                EC.presence_of_all_elements_located(
-                    (By.XPATH, "//input[@type='checkbox']")
-                )
+            headers = self.driver.find_elements(
+                By.XPATH, "//th[contains(@class, 'label')]"
             )
-            # Check all checkboxes that are visible and unchecked
-
-            if checkbox.is_displayed() and not checkbox.is_selected():
-                try:
-                    self._random_delay()
-                    checkbox.click()
-                    self._maybe_rotate_user_agent()
-                except Exception as e:
-                    print(e)
-                    # If direct click fails, try JavaScript click
-                    self.driver.execute_script("arguments[0].click();", checkbox)
-
-            print(f"Selected {checkbox.text} parameter")
-
+            return [header.text.strip() for header in headers if header.text.strip()]
         except Exception as e:
-            print(f"Error selecting parameters: {e}")
-            return False
+            print(f"Error getting column names: {e}")
+            return []
 
-    def click_cauta_button(self):
-        """Attempt to click the cauta button"""
-        try:
-            search_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//button[contains(text(), 'Cauta')]")
-                )
-            )
+    def select_columns(self, columns_to_select):
+        """Select specific columns for download, always including PERIOADE."""
+        # Add PERIOADE if not already present
+        columns_to_select = list(set(columns_to_select + ["PERIOADE"]))
+        print(
+            f"\nSelecting columns (always including PERIOADE): {', '.join(columns_to_select)}"
+        )
 
-            search_button.click()
-
-            # Optional: Add a delay to observe the action
-
-            print("Clicked CAUTA button")
-            time.sleep(random.randint(3, 5))  # Longer wait for results to load
-            return True
-        except Exception as e:
-            print(f"Error clicking cauta button: {e}")
-            return False
-
-    def click_table_code_button(self, table_code):
-        """Attempt to click the cauta button"""
-        try:
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            search_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, f"//span[contains(text(), '{table_code}')]")
-                )
-            )
-            search_button.click()
-            print(f"Clicked {table_code} button")
-            time.sleep(random.randint(3, 5))  # Longer wait for results to load
-            return True
-        except Exception as e:
-            print(f"Error clicking table code button: {e}")
-            return False
-
-    def click_download_button(self):
-        """Attempt to click the download button using multiple methods."""
-        try:
-            print("Attempting to download data...")
-
-            # Method 1: Try to find buttons with download-related classes or text
-            download_buttons = self.driver.find_elements(
-                By.XPATH,
-                "//img[@alt='Export to CSV']",
-            )
-
-            for button in download_buttons:
-                if button.is_displayed():
-                    self._random_delay()
-                    button.click()
-                    print("Clicked on download button")
-                    self._maybe_rotate_user_agent()
-                    time.sleep(3)
-
-            print("Could not find download button using standard methods")
-            return False
-        except Exception as e:
-            print(f"Error during download: {e}")
-            return False
-
-    def iterate_and_download_table(self, table_code):
+        selected_columns = []
         checkboxes = self.wait.until(
             EC.presence_of_all_elements_located(
                 (By.XPATH, "//th//input[@type='checkbox']")
             )
         )
-        categories = []
-        # Check all checkboxes that are visible and unchecked
-        for checkbox in checkboxes:
-            if checkbox.is_displayed() and not checkbox.is_selected():
-                categories.append(checkbox)
-        print("NUMBER OF CATEGORIES IS: ", len(categories))
-        always_check_category = categories[-2]
-        for cat in categories[:-2]:
-            try:
-                self._random_delay()
-                print("Clicking column Category:")
-                cat.click()
-                self._random_delay()
-                print("Clicking Periods Category: ")
-                always_check_category.click()
-                # click cauta button
-                self.click_cauta_button()
-                # Download the data
-                self.click_download_button()
-                self.click_table_code_button(table_code)
-                self._maybe_rotate_user_agent()
+        available_columns = self.get_column_names()
 
-            except:
-                # If direct click fails, try JavaScript click
-                self.driver.execute_script("arguments[0].click();", checkbox)
+        # Verify PERIOADE exists before proceeding
+        if "PERIOADE" not in available_columns:
+            print("⚠ CRITICAL: PERIOADE column not found in table headers")
+            return False
 
-    def scrape_table(self, table_code, pixel_coords=None):
+        for checkbox, header in zip(checkboxes, available_columns):
+            if header in columns_to_select and checkbox.is_displayed():
+                try:
+                    if not checkbox.is_selected():
+                        checkbox.click()
+                        selected_columns.append(header)
+                        print(f"✓ Selected column: {header}")
+                        self._random_delay()
+                except Exception:
+                    self.driver.execute_script("arguments[0].click();", checkbox)
+                    selected_columns.append(header)
+                    print(f"✓ Selected column (JS fallback): {header}")
+
+        # Double-check PERIOADE was selected
+        if "PERIOADE" not in selected_columns:
+            print("✗ FATAL: Failed to select PERIOADE column")
+            return False
+
+        return selected_columns
+
+    def execute_search(self):
+        """Click the search button."""
+        try:
+            search_button = self.wait.until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, "//button[contains(text(), 'Cauta')]")
+                )
+            )
+            search_button.click()
+            print("✓ Executed search")
+            time.sleep(random.randint(3, 5))
+            return True
+        except Exception as e:
+            print(f"Error clicking search button: {e}")
+            return False
+
+    def download_data(self, filename):
+        """Download the data as CSV."""
+        try:
+            download_buttons = self.driver.find_elements(
+                By.XPATH, "//img[@alt='Export to CSV']"
+            )
+            for button in download_buttons:
+                if button.is_displayed():
+                    button.click()
+                    print(f"✓ Triggered download for {filename}")
+                    self._rename_downloaded_file(filename)
+                    return True
+            print("✗ Could not find download button")
+            return False
+        except Exception as e:
+            print(f"Error during download: {e}")
+            return False
+
+    def scrape_table(self, table_config):
         """
-        Complete process to scrape a specific table.
+        Scrape a table with given configuration.
 
         Args:
-            table_code: The code of the table to scrape
-            pixel_coords: Optional dictionary of pixel coordinates for various UI elements
+            table_config: Dictionary containing:
+                - table_code: Table identifier
+                - path: Navigation path as list
         """
+        print(f"\n=== Starting scrape for table {table_config['table_code']} ===")
+
+        if not self.navigate_to_table_by_path(table_config["path"]):
+            print(f"✗ Failed to navigate to table {table_config['table_code']}")
+            return False
+
+        # Get all available columns
+        all_columns = self.get_column_names()
+        if not all_columns:
+            print("✗ No columns found in table")
+            return False
+
+        # Filter out PERIOADE and non-data columns
+        data_columns = [
+            col
+            for col in all_columns
+            if col not in ["PERIOADE", "", " ", " UM: NUMAR PERSOANE "]
+            and not col.startswith("_")
+        ]
+
+        print(f"Found {len(data_columns)} data columns to process")
+
+        results = []
+        for column in data_columns:
+            print(f"\n--- Processing column: {column} ---")
+
+            try:
+                # Select current column + PERIOADE
+                selected = self.select_columns([column])
+                if not selected:
+                    continue
+
+                if not self.execute_search():
+                    continue
+
+                # Generate filename with column name
+                filename = self._generate_filename(
+                    table_config["table_code"], [column, "PERIOADE"]
+                )
+
+                if not self.download_data(filename):
+                    continue
+
+                # Click table button to reset selection
+                self._click_table_button(table_config["table_code"])
+                time.sleep(2)
+
+                results.append(column)
+                print(f"✓ Successfully processed {column}")
+
+            except Exception as e:
+                print(f"✗ Failed processing {column}: {str(e)}")
+
+        print(f"\nProcessed {len(results)}/{len(data_columns)} columns successfully")
+        print("Clicking HOME button...")
+        self._click_home_button()
+        return len(results) > 0
+
+    def scrape_multiple_tables(self, table_configs):
+        """Scrape multiple tables with given configurations."""
         self.navigate_to_website()
 
-        # Try navigation methods in order of preference
-        success = False
-        # Method 2: Try to navigate by predefined path
-        if not success:
-            path = [
-                "A. STATISTICA SOCIALA",
-                "POPULATIE SI STRUCTURA DEMOGRAFICA",
-                "POPULATIA REZIDENTA",
-                table_code,
-            ]
-            success = self.navigate_to_table_by_path(path)
+        results = {}
+        for config in table_configs:
+            start_time = time.time()
+            success = self.scrape_table(config)
+            elapsed = time.time() - start_time
+            results[config["table_code"]] = {
+                "success": success,
+                "time_seconds": round(elapsed, 2),
+            }
 
-        table_download_success = self.iterate_and_download_table(table_code)
+        print("\n=== Scraping Summary ===")
+        for table_code, result in results.items():
+            status = "✓ SUCCESS" if result["success"] else "✗ FAILED"
+            print(f"{status} - {table_code} ({result['time_seconds']}s)")
 
-        print(f"Scraping of table {table_code} completed")
-        return True
+        return results
 
     def close(self):
         """Close the browser and clean up."""
         if self.driver:
             self.driver.quit()
-            print("Browser closed")
-
-
-def scrape_multiple_tables(table_codes, pixel_coordinates=None):
-    """
-    Scrape multiple tables from INSSE.
-
-    Args:
-        table_codes: List of table codes to scrape
-        pixel_coordinates: Optional dictionary of pixel coordinates
-    """
-    scraper = INSSEScraper()
-
-    try:
-        for table_code in table_codes:
-            print(f"\n--- Starting scrape of table {table_code} ---")
-            scraper.scrape_table(table_code, pixel_coordinates)
-            time.sleep(3)  # Wait between tables
-    except Exception as e:
-        print(f"Error during scraping: {e}")
-    finally:
-        scraper.close()
+            print("\n=== Browser closed ===")
 
 
 if __name__ == "__main__":
-    # List of tables to scrape
-    tables = ["POP105A", "POP106A", "POP109A"]
+    # Example configuration for multiple tables
+    TABLE_CONFIGS = [
+        {
+            "table_code": "POP105A",
+            "path": ["1. POPULATIA REZIDENTA", "POP105A"],
+        },
+        {
+            "table_code": "POP106A",
+            "path": ["1. POPULATIA REZIDENTA", "POP106A"],
+        },
+        {
+            "table_code": "POP109A",
+            "path": ["1. POPULATIA REZIDENTA", "POP109A"],
+        },
+        {
+            "table_code": "POP109A",
+            "path": ["2. POPULATIA DUPA DOMICILIU", "POP107A"],
+        },
+    ]
 
-    # You may need to adjust these coordinates based on your screen resolution
-    # These are example values and should be calibrated for your specific setup
-    pixel_coords = {
-        "search_box": {"x": 700, "y": 325},
-        "search_button": {"x": 150, "y": 425},
-        "table_result": {"x": 500, "y": 390},
-        "column_selectors": [
-            {"x": 170, "y": 430},  # Age groups
-            {"x": 340, "y": 430},  # Sex
-            {"x": 510, "y": 430},  # Residence
-            {"x": 680, "y": 430},  # Regions
-            {"x": 850, "y": 430},  # Years
-        ],
-        "download_button": {"x": 150, "y": 535},
-        "csv_format": {"x": 185, "y": 535},
-    }
-
-    scrape_multiple_tables(tables, pixel_coords)
+    scraper = INSSEScraper()
+    try:
+        scraper.scrape_multiple_tables(TABLE_CONFIGS)
+    except Exception as e:
+        print(f"\n!!! Critical error: {e}")
+    finally:
+        scraper.close()
