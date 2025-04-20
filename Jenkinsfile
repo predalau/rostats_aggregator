@@ -29,12 +29,6 @@ pipeline {
             }
         }
 
-        #stage('Test') {
-        #   steps {
-        #        sh 'docker run ${DOCKER_IMAGE}:${DOCKER_TAG} npm test'  # Adapt to your test command
-        #    }
-        #}
-
         stage('Push to Registry') {
             steps {
                 script {
